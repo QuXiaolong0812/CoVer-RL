@@ -2,6 +2,8 @@
 
 This repository implements CoVer-RL for document-level multimodal event extraction on CMMEvent. The pipeline builds structured perturbations (SPP), warms up a Qwen3-VL verifier, trains an event-entailment scorer, and alternates generator and verifier LoRA updates with GRPO. It uses hierarchical structured feedback (HSFP) and provides a Triangular Consistency Reward (TCR) evidence-scoring path.
 
+CPU preprocessing also supports M2E2 and WildMMEvent. The training and evaluation commands in this guide target CMMEvent.
+
 The [cloud configuration](configs/cmmevent_cloud.json) uses Qwen3-VL-8B-Instruct for generation and Qwen3-VL-4B-Instruct for verification. The [local configuration](configs/inference.json) uses 2B models for smoke tests. The commands below assume Linux Bash and the repository root as the working directory.
 
 ## Setup
@@ -115,6 +117,20 @@ python build_spp.py --profile full \
 ```
 
 The `full` profile enables all eight operators. It caps negative selections at 50 per operator for train and 15 for dev, pairing each with a clean candidate. Check `spp_audit.json` for counts and rejection reasons. To reproduce a reviewed A2 selection, add `--a2-review /path/to/a2-review.json` using a separately obtained review file that matches the train and dev SHA-256 hashes. The default command uses the built-in A2 selection rules.
+
+## Prepare M2E2 and WildMMEvent
+
+These commands require Pillow and run on CPU. Run them from the project root with the raw data in the layout below. Use `--dataset-dir` and `--output-dir` to select other locations. Each run records input fingerprints and writes an audit under `runs/preprocess/` and `archives/preprocess/`.
+
+```bash
+python main.py preprocess --dataset m2e2
+python main.py preprocess --dataset wildmmevent
+```
+
+- **M2E2.** Place the release's `article/` and `image/` directories under `datasets/M2E2/`. The script looks for the official `m2e2_annotations` directory, including the four text and image event JSON files and `crossmedia_coref.txt`. Use `--annotations-dir` if the labels are stored elsewhere. The held-out `datasets/processed/m2e2/test.jsonl` retains sentence-level labels, article images, and explicit cross-media coreference links. It also retains asset-only documents with `has_annotations: false`. Use the native sentence tokens for span-based evaluation and the raw article for context. Check the audit for coverage and missing assets in your copy. [Official M2E2 release](https://github.com/limanling/m2e2#data)
+- **WildMMEvent.** Place `annotation_text.json`, `annotation_image.json`, and the case-sensitive `Image/` directory under `datasets/WildMMEvent/`. Output under `datasets/processed/wildmmevent/` contains normalized document records and grouped train, dev, and test splits. The default target ratio is 80:10:10 with seed 42. A supplied `--split-file` must keep documents with matching normalized titles or image hashes in the same split. The audit reports image alignment, span validation, and bounding-box issues.
+
+The same entries can be run directly with `python data_preprocess_m2e2.py` and `python data_preprocess_wildmmevent.py`.
 
 ## Run a smoke test
 

@@ -29,9 +29,17 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 SOURCE_FIELDS = {"des": "description", "tit": "title", "title": "title", "img": "image"}
 
 
-def read_json(path):
+def read_json(path, *, reject_duplicates=False):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Duplicate JSON key {key!r} in {path}.")
+            result[key] = value
+        return result
+
     with path.open(encoding="utf-8-sig") as file:
-        return json.load(file)
+        return json.load(file, object_pairs_hook=unique_object if reject_duplicates else None)
 
 
 def file_hash(path):
@@ -265,8 +273,8 @@ def generate_split(groups, seed):
     return assignment
 
 
-def supplied_split(path, all_ids, records):
-    data = read_json(path)
+def supplied_split(path, all_ids, records, *, reject_duplicates=False):
+    data = read_json(path, reject_duplicates=reject_duplicates)
     if not isinstance(data, dict) or set(data) != set(SPLIT_RATIOS):
         raise ValueError("Split file must contain exactly train, dev, and test.")
     assignment = {}

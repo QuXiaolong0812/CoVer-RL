@@ -1,4 +1,4 @@
-"""CoVer-RL training, inference and evaluation for CMMEvent."""
+"""CoVer-RL dataset preparation and CMMEvent training, inference and evaluation."""
 
 import argparse
 import hashlib
@@ -13,6 +13,7 @@ from run_logging import RunLog, sha256_file
 
 PROJECT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = PROJECT / "configs" / "inference.json"
+DATASET_FOLDERS = {"cmmevent": "CMMEvent", "m2e2": "M2E2", "wildmmevent": "WildMMEvent"}
 
 
 def add_evidence_options(parser):
@@ -32,11 +33,14 @@ def build_parser():
     selection.add_argument("--all", action="store_true", help="Use all rows instead of the configured limit.")
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="stage", required=True)
-    prep = commands.add_parser("preprocess", help="Prepare CMMEvent on CPU with an archived audit.")
+    prep = commands.add_parser("preprocess", help="Prepare a dataset on CPU with an archived audit.")
     prep.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    prep.add_argument("--dataset", choices=DATASET_FOLDERS, default="cmmevent")
+    prep.add_argument("--dataset-dir", type=Path, help="Override the raw dataset directory.")
     prep.add_argument("--output-dir", type=Path)
-    prep.add_argument("--split-file", type=Path)
-    prep.add_argument("--seed", type=int, default=42)
+    prep.add_argument("--annotations-dir", type=Path, help="Override the M2E2 annotations directory.")
+    prep.add_argument("--split-file", type=Path, help="Supply split IDs for CMMEvent or WildMMEvent.")
+    prep.add_argument("--seed", type=int, help="Grouped split seed for CMMEvent or WildMMEvent (default: 42).")
     generator = commands.add_parser("generate", parents=[common], help="Generate CMMEvent candidates.")
     generator.add_argument("--generator-model", help="Checkpoint folder name under --models-dir.")
     generator.add_argument("--generator-adapter-dir", type=Path, help="Generator LoRA from a GRPO cycle.")
@@ -185,9 +189,23 @@ def resolve_config(args):
         "runs_dir": project_path(config["runs_dir"]), "archives_dir": project_path(config["archives_dir"]),
     }
     if args.stage == "preprocess":
-        resolved.update(dataset_dir=project_path(config["dataset_dir"]), seed=args.seed,
-                        output_dir=args.output_dir.resolve() if args.output_dir else project_path(config["processed_dir"]),
-                        split_file=args.split_file.resolve() if args.split_file else None)
+        if args.dataset == "m2e2" and (args.split_file is not None or args.seed is not None):
+            raise ValueError("M2E2 uses the held-out benchmark. --split-file and --seed are not applicable.")
+        if args.dataset != "m2e2" and args.annotations_dir is not None:
+            raise ValueError("--annotations-dir is only supported for M2E2.")
+        if args.dataset == "cmmevent":
+            raw, processed = config["dataset_dir"], config["processed_dir"]
+        else:
+            raw = Path("datasets") / DATASET_FOLDERS[args.dataset]
+            processed = Path("datasets") / "processed" / args.dataset
+        resolved.update(
+            dataset=args.dataset,
+            dataset_dir=args.dataset_dir.resolve() if args.dataset_dir else project_path(raw),
+            output_dir=args.output_dir.resolve() if args.output_dir else project_path(processed),
+            annotations_dir=args.annotations_dir.resolve() if args.annotations_dir else None,
+            split_file=args.split_file.resolve() if args.split_file else None,
+            seed=None if args.dataset == "m2e2" else 42 if args.seed is None else args.seed,
+        )
         return argparse.Namespace(**resolved)
     if args.stage == "evaluate-extraction":
         resolved.update(processed_dir=project_path(config["processed_dir"]),
@@ -262,28 +280,44 @@ def run_generator(args):
 
 
 def run_preprocess(args):
-    from data_preprocess import prepare
     from run_logging import write_json
 
+    code = ("data_preprocess.py",)
+    if args.dataset == "m2e2":
+        from data_preprocess_m2e2 import prepare
+
+        code += ("data_preprocess_m2e2.py",)
+    elif args.dataset == "wildmmevent":
+        from data_preprocess_wildmmevent import prepare
+
+        code += ("data_preprocess_wildmmevent.py",)
+    else:
+        from data_preprocess import prepare
+
     def prepare_and_record(options, run):
-        names = ("annotation_text.json", "annotation_image.json")
-        inputs = {name: sha256_file(options.dataset_dir / name) for name in names}
-        if options.split_file is not None:
-            inputs[str(options.split_file)] = sha256_file(options.split_file)
-        run.update_manifest(inputs=inputs, accelerator="cpu")
-        audit = prepare(options.dataset_dir, options.output_dir, options.seed, options.split_file)
+        run.update_manifest(dataset=options.dataset, accelerator="cpu")
+        if options.dataset == "m2e2":
+            audit = prepare(options.dataset_dir, options.output_dir, annotations_dir=options.annotations_dir)
+            run.update_manifest(inputs=audit["inputs"])
+        else:
+            names = ("annotation_text.json", "annotation_image.json")
+            inputs = {name: sha256_file(options.dataset_dir / name) for name in names}
+            if options.split_file is not None:
+                inputs[str(options.split_file)] = sha256_file(options.split_file)
+            run.update_manifest(inputs=inputs)
+            audit = prepare(options.dataset_dir, options.output_dir, options.seed, options.split_file)
         write_json(run.path / "audit.json", audit)
         run.include_in_archive("audit.json")
         run.update_manifest(outputs={path.name: sha256_file(path) for path in sorted(options.output_dir.glob("*.json*"))})
         for split, counts in audit["split_counts"].items():
             run.metric(split=split, **counts)
-            run.logger.info("%s documents=%d multi_event=%d", split, counts["documents"],
-                            counts["multi_event_documents"])
-        run.summary.update(output_dir=str(options.output_dir), split_counts=audit["split_counts"],
+            run.logger.info("%s %s documents=%d multi_event=%s", options.dataset, split, counts["documents"],
+                            counts.get("multi_event_documents", "n/a"))
+        run.summary.update(dataset=options.dataset, output_dir=str(options.output_dir), split_counts=audit["split_counts"],
                            excluded=sum(len(items) for items in audit["exclusions"].values()))
         run.logger.info("Saved prepared dataset to %s", options.output_dir)
 
-    return run_logged(args, "preprocess", prepare_and_record, ("data_preprocess.py",))
+    return run_logged(args, "preprocess", prepare_and_record, code)
 
 
 def run_extraction(args):
