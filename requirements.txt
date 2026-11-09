@@ -1,0 +1,13 @@
+# CMMEvent preprocessing, evidence scorers and Qwen3-VL LoRA training.
+# See README.md for the Linux Python and CUDA environment.
+# Keep the existing CUDA builds. On a fresh GPU machine, install a matching
+# torch/torchvision pair from the PyTorch CUDA index before using this file.
+torch==2.8.0
+torchvision==0.23.0
+Pillow==11.3.0
+transformers==4.57.6
+peft==0.17.1
+accelerate==1.10.1
+sentencepiece==0.2.1
+# Provides the hf download command used by the deployment guide.
+huggingface-hub==0.36.2

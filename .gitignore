@@ -1,0 +1,41 @@
+# External datasets, model weights, and generated experiments.
+/datasets/
+/models/
+/runs/
+/archives/
+/checkpoints/
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+pytorch_model*.bin
+*.tar.gz
+*.tgz
+*.zip
+
+# Local research material and machine-specific configuration.
+/main.pdf
+/configs/cmmevent_a2_review_v2.json
+/configs/*.local.json
+.env
+.env.*
+!.env.example
+/.idea/
+/.vscode/
+
+# Python environments, bytecode, and tooling output.
+/.venv/
+/venv/
+/env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+*.egg-info/
+/build/
+/dist/
+.DS_Store
+Thumbs.db
